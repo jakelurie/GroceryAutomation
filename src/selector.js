@@ -66,7 +66,7 @@ export function validateDecisions(result, batch) {
   });
 }
 
-export async function rankItems(items, prefs, signal, ask = askAI) {
+export async function rankItems(items, prefs, signal, ask = askAI, onProgress = () => {}) {
   const batches = []; let batch = [], size = 0;
   for (const item of items) {
     const length = JSON.stringify(item).length;
@@ -75,10 +75,13 @@ export async function rankItems(items, prefs, signal, ask = askAI) {
   }
   if (batch.length) batches.push(batch);
   const decisions = [];
-  for (const part of batches) {
+  for (const [index, part] of batches.entries()) {
     signal?.throwIfAborted();
+    const progress = { batch: index + 1, total: batches.length, completed: index, batchStartedAt: new Date().toISOString(), groceries: part.map(i => i.name) };
+    onProgress(progress);
     const result = await ask({ preferences: prefs, wholeList: items.map(({ id, name, quantity, explicit }) => ({ id, name, quantity, explicit })), items: part }, signal);
     decisions.push(...validateDecisions(result, part));
+    onProgress({ ...progress, completed: index + 1 });
   }
   return decisions;
 }

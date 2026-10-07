@@ -31,17 +31,36 @@ $('plan').onclick = event => { if (event.target.dataset.remove !== undefined) { 
 $('connect').onclick = () => action($('connect'), async () => { busy = true; try { notify('Opening the Amazon shopping browser on your laptop…'); const data = await api('connect', { store:$('store').value }); notify(data.message); } finally { busy = false; } });
 $('start').onclick = () => action($('start'), async () => { await api('runs', { items, store:$('store').value, preferences:{zip:$('zip').value, quality:$('quality').value, people:Number($('people').value), days:Number($('days').value)} }); $('review-panel').hidden = true; notify('Shopping started. You can follow each item below. Checkout stays with you.'); });
 $('stop').onclick = () => action($('stop'), async () => notify((await api('stop', {})).message));
+function aiProgress(run) {
+  const p = run.aiProgress;
+  if (!p || run.status !== 'running' || !run.phase?.startsWith('AI comparing')) return '';
+  return `<section class="ai-progress" aria-label="AI selection progress">
+    <strong>Comparing groceries · batch ${p.batch} of ${p.total}</strong>
+    <progress max="${p.total}" value="${p.completed}" aria-label="Completed AI batches"></progress>
+    <p>${p.completed} of ${p.total} batches complete · <span data-ai-start="${escape(p.batchStartedAt)}">0s elapsed</span></p>
+    <p>Considering: ${p.groceries.map(escape).join(', ')}</p>
+    <p>Waiting for AI’s selection. Each batch has a 3-minute timeout. Progress updates when a batch finishes; no cart additions happen during this step.</p>
+  </section>`;
+}
+function updateAITimers() {
+  document.querySelectorAll('[data-ai-start]').forEach(el => {
+    const seconds = Math.max(0, Math.floor((Date.now() - Date.parse(el.dataset.aiStart)) / 1000));
+    el.textContent = `${Math.floor(seconds / 60)}m ${seconds % 60}s elapsed in this batch`;
+  });
+}
 async function refresh() {
   try {
     const state = await api('state'); csrf = state.csrf; active = state.active;
     $('connect').disabled = Boolean(active || state.connecting || busy); $('start').disabled = Boolean(active) || !items.length;
     $('stop').hidden = !active;
+    updateAITimers();
     const serial = JSON.stringify(state.runs); if (serial === previous) return; previous = serial;
     if (!state.runs.length) return;
     $('runs').innerHTML = state.runs.map(run => {
       const added = run.items.filter(i => i.status === 'added').length;
-      return `<article class="card run"><div class="run-head"><div><h2>${added} of ${run.items.length} groceries added</h2><p>${run.store === 'fresh' ? 'Amazon Fresh' : 'Amazon Grocery'} · ${escape(new Date(run.createdAt).toLocaleString())}</p></div><span class="badge ${escape(run.status)}">${escape(run.status)}</span></div><p>${escape(run.phase || '')}${run.preferences ? ' · ZIP ' + escape(run.preferences.zip) + ' · ' + escape(run.preferences.quality) : ''}</p>${run.error ? `<p class="error">${escape(run.error)}</p>` : ''}${run.items.map(item => `<div class="result-row"><div class="result-info"><strong>${escape(item.name)} × ${item.quantity}</strong>${item.product ? `<p><a href="${escape(item.product.url)}" target="_blank" rel="noopener noreferrer">${escape(item.product.title)}</a>${item.price ? ' · ' + escape(item.price) : ''}</p>` : ''}${item.selectionReason ? `<p><strong>Why this choice:</strong> ${escape(item.selectionReason)}</p>` : ''}${(item.attempts || []).map(a => `<p>Skipped ${escape(a.title)}: ${escape(a.reason)}</p>`).join('')}<p>${escape(item.message || (item.status === 'searching' ? 'Looking for a match…' : 'Waiting to search'))}</p></div><span class="badge ${escape(item.status)}">${escape(item.status)}</span></div>`).join('')}<div class="run-footer"><a class="cart-link" href="https://www.amazon.com/gp/cart/view.html" target="_blank" rel="noopener noreferrer">Review your Amazon cart ↗</a><button class="secondary download" data-download="${run.id}">Save report ↓</button></div></article>`;
+      return `<article class="card run"><div class="run-head"><div><h2>${added} of ${run.items.length} groceries added</h2><p>${run.store === 'fresh' ? 'Amazon Fresh' : 'Amazon Grocery'} · ${escape(new Date(run.createdAt).toLocaleString())}</p></div><span class="badge ${escape(run.status)}">${escape(run.status)}</span></div><p>${escape(run.phase || '')}${run.preferences ? ' · ZIP ' + escape(run.preferences.zip) + ' · ' + escape(run.preferences.quality) : ''}</p> ${aiProgress(run)}${run.error ? `<p class="error">${escape(run.error)}</p>` : ''}${run.items.map(item => `<div class="result-row"><div class="result-info"><strong>${escape(item.name)} × ${item.quantity}</strong>${item.product ? `<p><a href="${escape(item.product.url)}" target="_blank" rel="noopener noreferrer">${escape(item.product.title)}</a>${item.price ? ' · ' + escape(item.price) : ''}</p>` : ''}${item.selectionReason ? `<p><strong>Why this choice:</strong> ${escape(item.selectionReason)}</p>` : ''}${(item.attempts || []).map(a => `<p>Skipped ${escape(a.title)}: ${escape(a.reason)}</p>`).join('')}<p>${escape(item.message || (item.status === 'searching' ? 'Looking for a match…' : 'Waiting to search'))}</p></div><span class="badge ${escape(item.status)}">${escape(item.status)}</span></div>`).join('')}<div class="run-footer"><a class="cart-link" href="https://www.amazon.com/gp/cart/view.html" target="_blank" rel="noopener noreferrer">Review your Amazon cart ↗</a><button class="secondary download" data-download="${run.id}">Save report ↓</button></div></article>`;
     }).join('');
+    updateAITimers();
     document.querySelectorAll('[data-download]').forEach(button => button.onclick = () => { const run = state.runs.find(r => r.id === button.dataset.download); const blob = new Blob([JSON.stringify(run,null,2)], {type:'application/json'}); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = 'grocery-report-' + run.createdAt.slice(0,10) + '.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); });
   } catch (error) { notify('Could not reach the app. Keep the laptop awake and refresh to reconnect.'); }
 }

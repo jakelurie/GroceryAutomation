@@ -75,12 +75,40 @@ export async function collectCandidates(page, name) {
   await cards.first().waitFor({ timeout: 12000 }).catch(() => {});
   const products = await cards.evaluateAll(nodes => nodes.slice(0,24).map(card => ({
     asin: card.getAttribute('data-asin'),
+    href: card.querySelector('a:has(h2), h2 a, a.a-link-normal.s-no-outline')?.getAttribute('href'),
     title: card.querySelector('h2')?.textContent?.trim() || '',
     details: (card.innerText || '').slice(0,1600),
     price: card.querySelector('.a-price .a-offscreen')?.textContent?.trim() || null,
   })));
   return products.filter(p => /^[A-Z0-9]{10}$/.test(p.asin) && p.title && suitable(name,p.title) && !/currently unavailable|out of stock/i.test(p.details))
-    .map(p => ({ ...p, url: `https://www.amazon.com/dp/${p.asin}` }));
+    .map(p => {
+      // Keep storefront and delivery context from the actual search-result link.
+      let url = new URL(`/dp/${p.asin}`, 'https://www.amazon.com');
+      try {
+        const link = new URL(p.href, 'https://www.amazon.com');
+        if (link.protocol === 'https:' && link.hostname === 'www.amazon.com' &&
+            link.pathname.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})(?:\/|$)/)?.[1] === p.asin && !isPurchaseUrl(link.href)) url = link;
+      } catch {}
+      const { href, ...product } = p;
+      return { ...product, url: url.href };
+    });
+}
+
+export async function verifyProduct(page, choice, query, timeout = 12000) {
+  const normalize = text => text.normalize('NFKC').toLowerCase().replace(/[®™]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  // Fresh and grocery pages may use a heading rather than the retail productTitle ID.
+  const titles = page.locator('#productTitle, #title h1, h1, [data-a-feature-name="title"]');
+  try {
+    await page.waitForFunction(() => [...document.querySelectorAll('#productTitle, #title h1, h1, [data-a-feature-name="title"]')].some(el => el.getClientRects().length && el.textContent.trim()), undefined, { timeout });
+  } catch {}
+  const visible = await titles.evaluateAll(nodes => nodes.filter(el => el.getClientRects().length).map(el => el.textContent.trim()).filter(Boolean));
+  if (!visible.length) throw new Error('Product heading did not load in a supported layout; this does not establish that the item is sold out.');
+  const asin = new URL(page.url()).pathname.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})(?:\/|$)/)?.[1];
+  if (asin !== choice.asin) throw new Error('Amazon redirected to a different product; skipped.');
+  const title = visible.find(text => normalize(text) === normalize(choice.title));
+  if (!title) throw new Error('Product heading differs from the search result; skipped to avoid a changed size or variant.');
+  if (!suitable(query, title)) throw new Error('Product food form or requested qualifier conflicts with your list.');
+  return title;
 }
 
 export async function shop(run, save, cancelled, getBrowser = browser, rank = rankItems) {
@@ -119,7 +147,7 @@ export async function shop(run, save, cancelled, getBrowser = browser, rank = ra
     if (cancelled()) return;
     const collected = run.items.filter(i => i.status === 'collected');
     run.phase = 'AI comparing food matches, package sizes, quality and value'; save();
-    const decisions = await rank(collected, run.preferences, controller.signal);
+    const decisions = await rank(collected, run.preferences, controller.signal, undefined, progress => { run.aiProgress = progress; save(); });
     for (const decision of decisions) {
       const item = run.items[decision.id];
       item.choices = decision.choices; item.message = decision.reason;
@@ -136,10 +164,7 @@ export async function shop(run, save, cancelled, getBrowser = browser, rank = ra
           await page.goto(choice.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
           if (await needsAttention(page)) throw new SessionError('Amazon needs sign-in or verification. Complete it in the shopping browser.');
           await verifyLocation(page, run.preferences.zip);
-          const title = (await page.locator('#productTitle').textContent({ timeout: 2000 }).catch(() => ''))?.trim();
-          if (!title || !suitable(item.name, title)) throw new Error('Could not verify the selected product title.');
-          // Refuse a redirect to a different product or a changed variant.
-          if (!page.url().includes(choice.asin) || title.toLowerCase() !== choice.title.toLowerCase()) throw new Error('Product details changed since search; skipped to avoid the wrong variant.');
+          const title = await verifyProduct(page, choice, item.name);
           const availability = await page.locator('#availability, #deliveryBlockMessage').allTextContents();
           if (/currently unavailable|out of stock|cannot be (?:shipped|delivered)|not available/i.test(availability.join(' '))) throw new Error('Unavailable for your delivery location.');
           const add = page.locator('#add-to-cart-button');
