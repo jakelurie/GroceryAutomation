@@ -20,3 +20,21 @@ test('grocery headings load asynchronously; identity and package changes stay pr
     assert.equal((await collectCandidates(page,'salmon'))[0].url,'https://www.amazon.com/Fresh/dp/B000000001?almBrandId=Fresh');
   } finally { await browser.close(); }
 });
+
+test('duplicate add controls select an enabled matching product; brand headings do not replace titles', async () => {
+  const { findAddControl } = await import('../src/shopper.js');
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<button id="add-to-cart-button" hidden>Add to Cart</button>
+      <form><input name="ASIN" value="B000000002"><button id="add-to-cart-button">Add to Cart</button></form>
+      <form><input name="ASIN" value="B000000001"><button id="add-to-cart-button" onclick="event.preventDefault();this.textContent='Clicked'">Add to Cart</button></form>`);
+    const add = await findAddControl(page, 'B000000001');
+    await add.click();
+    assert.equal(await add.textContent(), 'Clicked');
+    await page.setContent('<button id="add-to-cart-button" disabled>Add to Cart</button>');
+    await assert.rejects(findAddControl(page,'B000000001',10), /No visible, enabled/);
+    await page.setContent('<div data-component-type="s-search-result" data-asin="B000000001"><h2>Celtic Sea Salt</h2><a href="/dp/B000000001"><h2>Celtic Sea Salt Fine Ground 8 oz</h2></a></div>');
+    assert.equal((await collectCandidates(page,'Celtic sea salt'))[0].title,'Celtic Sea Salt Fine Ground 8 oz');
+  } finally { await browser.close(); }
+});

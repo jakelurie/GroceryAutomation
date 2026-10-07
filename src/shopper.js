@@ -76,7 +76,7 @@ export async function collectCandidates(page, name) {
   const products = await cards.evaluateAll(nodes => nodes.slice(0,24).map(card => ({
     asin: card.getAttribute('data-asin'),
     href: card.querySelector('a:has(h2), h2 a, a.a-link-normal.s-no-outline')?.getAttribute('href'),
-    title: card.querySelector('h2')?.textContent?.trim() || '',
+    title: [...card.querySelectorAll('h2')].map(el => el.textContent.trim()).sort((a,b) => b.length - a.length)[0] || '',
     details: (card.innerText || '').slice(0,1600),
     price: card.querySelector('.a-price .a-offscreen')?.textContent?.trim() || null,
   })));
@@ -109,6 +109,28 @@ export async function verifyProduct(page, choice, query, timeout = 12000) {
   if (!title) throw new Error('Product heading differs from the search result; skipped to avoid a changed size or variant.');
   if (!suitable(query, title)) throw new Error('Product food form or requested qualifier conflicts with your list.');
   return title;
+}
+
+export async function findAddControl(page, asin, timeout = 8000) {
+  const controls = page.locator('#add-to-cart-button, input[name="submit.add-to-cart"], button[name="submit.add-to-cart"]');
+  const deadline = Date.now() + timeout;
+  do {
+    for (let i = 0; i < await controls.count(); i++) {
+      const button = controls.nth(i);
+      if (!await button.isVisible() || !await button.isEnabled()) continue;
+      const valid = await button.evaluate((el, expected) => {
+        const form = el.closest('form');
+        const ids = form ? [...form.querySelectorAll('input[name="ASIN"], input[name="asin"]')].map(n => n.value).filter(Boolean) : [];
+        if (ids.some(id => id !== expected)) return false;
+        // Do not select a recurring purchase option while resolving duplicate controls.
+        if (/subscribe|subscription|sns/i.test(form?.getAttribute('action') || '')) return false;
+        return true;
+      }, asin);
+      if (valid) return button;
+    }
+    await page.waitForTimeout(200);
+  } while (Date.now() < deadline);
+  throw new Error('No visible, enabled Add to Cart control for this product. It may need an offer/store selection or be unavailable.');
 }
 
 export async function shop(run, save, cancelled, getBrowser = browser, rank = rankItems) {
@@ -167,9 +189,9 @@ export async function shop(run, save, cancelled, getBrowser = browser, rank = ra
           const title = await verifyProduct(page, choice, item.name);
           const availability = await page.locator('#availability, #deliveryBlockMessage').allTextContents();
           if (/currently unavailable|out of stock|cannot be (?:shipped|delivered)|not available/i.test(availability.join(' '))) throw new Error('Unavailable for your delivery location.');
-          const add = page.locator('#add-to-cart-button');
-          if (!await add.isVisible() || !await add.isEnabled()) throw new Error('No supported available Add to Cart option.');
-          const quantity = page.locator('select#quantity');
+          const add = await findAddControl(page, choice.asin);
+          const form = add.locator('xpath=ancestor::form[1]');
+          const quantity = (await form.count() ? form : page).locator('select#quantity:visible');
           if (await quantity.count()) await quantity.selectOption(String(choice.quantity));
           else if (choice.quantity !== 1) throw new Error('Requested package count is not available.');
           if (cancelled()) break;

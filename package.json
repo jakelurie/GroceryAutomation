@@ -8,6 +8,8 @@
   },
   "scripts": {
     "test": "node --test",
+    "setup": "playwright install chromium && node scripts/check-setup.js",
+    "doctor": "node scripts/check-setup.js",
     "start": "node src/server.js"
   },
   "keywords": [],

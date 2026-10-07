@@ -1,35 +1,74 @@
 # Pantry Pilot
 
-A local grocery-list app that uses a dedicated visible Playwright browser to add matching Amazon groceries to a cart. Checkout remains manual.
+Paste a grocery list, and Pantry Pilot uses Claude to choose products and add them to your Amazon cart. You review the cart and check out yourself. The app never purchases anything.
 
-## Run
+## 1. Install the prerequisites
 
-Requires Node 20 or newer. Run `npm ci`, `npx playwright install chromium`, and `npm start`. Open http://127.0.0.1:4320. `PORT` can override the port. The registered app uses its assigned port (currently 4306). Run `npm test` for planner, purchase-route, and simulated browser-worker tests.
+- Install **[Node.js LTS](https://nodejs.org/)** (includes npm).
+- Install the **Claude Code command-line app** using the command below. The Claude website or desktop app alone is not enough.
 
-1. Choose Amazon Grocery or Amazon Fresh and click **Open shopping browser** on your laptop.
-2. Sign in directly to Amazon and set your delivery location. Resolve any verification there. Do not share your password with the app.
-3. Enter groceries, review package counts, and click **Add this list to my cart**.
-4. Review confirmed, failed, unconfirmed, and skipped items. Open Amazon on your own browser with the same account to review package sizes, prices, availability, and checkout. Fresh may have a separate cart accessible from its storefront.
+**Windows:** open PowerShell and run:
 
-Enter a five-digit US delivery ZIP, people, days and quality (value, balanced or premium). The worker attempts to set Amazon's delivery ZIP, then verifies the displayed ZIP on every search and product page. If Amazon requires a saved address, select it in the shopping browser. This checks shopping location, not guaranteed delivery slots or inventory.
+```powershell
+irm https://claude.ai/install.ps1 | iex
+```
 
-All search pages are visited before selection. The worker extracts up to 24 product cards per grocery (title, ASIN, price, and visible details including sizes/ratings when present). It sends compact product data, not full HTML or account details, to the installed Claude CLI in batches of at most eight items / approximately 45,000 characters. Each batch includes the whole list for portion allocation. Claude runs with tools, MCP, customizations and session persistence disabled. Requires a working `claude` login; `PANTRY_CLAUDE_BIN` can set the executable. AI usage uses that account's limits. If AI fails or returns invalid selections, nothing is added; there is no silent first-result fallback.
+**Mac:** open Terminal and run:
 
-AI ranks up to three suitable choices per grocery, considering food form, stated quality, comparable unit prices, package sizes, people and days. Plain salmon excludes salmon burgers; requested dietary qualifiers are retained. It estimates quantities across the basket. Unknown sizes default to one package. These are approximate shopping assumptions, not a meal plan. Explicit counts (`2 x eggs`) or edited count fields fix package counts; blank count fields use AI. Reasons are saved in reports. Always review sizes, quantities, prices and ingredients in Amazon.
+```sh
+curl -fsSL https://claude.ai/install.sh | bash
+```
 
-Candidates are checked on their product page before adding. An unavailable or unsupported first choice can fall back to a ranked equivalent, with the reason recorded. After any add click starts, no fallback is attempted, even without confirmation. Product page titles must agree with collected titles; changed variants are skipped. Search coverage is limited to supported Amazon layouts and the first 24 cards per query, not a claim to find every deal.
+Close and reopen your terminal, then sign in:
 
-## Safety and limitations
+```sh
+claude auth login
+```
 
-- The worker only clicks `#add-to-cart-button`; it never clicks checkout or purchase buttons. The dedicated browser blocks known checkout, ordering, buy-now and one-click routes at the network layer, including while you interact with it. Complete checkout in your regular browser.
-- An addition is recorded as confirmed only after an Amazon confirmation is visible. Clicks without confirmation are **unconfirmed**, are never automatically retried, and need manual cart inspection. Restarting the server never resumes a run.
-- Account checks wait for the greeting to load and inspect the greeting separately from menu links. A sign-in challenge, unrecognized account header, or closed browser stops the run with a run-level explanation; remaining groceries are skipped.
-- Amazon layouts and availability vary. Unsupported pages, quantities, login challenges, and ambiguous matches are reported rather than bypassed. Live additions require testing with your signed-in account; automated tests use simulated Amazon pages.
-- No cart clearing or removal occurs. Existing cart contents remain; added quantities may increase quantities already present.
-- Stop prevents subsequent items; an in-flight action may finish.
-- `.local/browser` holds your dedicated browser session and `.local/runs.json` holds reports. Both are ignored by Git. Do not share this directory. The server binds only to loopback and rejects mutation requests without its per-process CSRF token.
-- The phone route uses private Tailscale access. Anyone with access to this app through your tailnet can operate your shopping browser; restrict access to your own devices. The laptop must be awake and the server running. No public hosting is configured.
+Follow the browser prompts using an account with Claude Code access. A free Claude account is not enough; a supported subscription or paid Console account is required. See [Claude’s official installation and account guide](https://code.claude.com/docs/en/setup).
 
-The UI keeps your draft in the current browser's local storage. Reports persist on the laptop and can be downloaded as JSON.
+## 2. Download and start Pantry Pilot
 
-References: [Playwright persistent browsers](https://playwright.dev/docs/api/class-browsertype#browser-type-launch-persistent-context), [Amazon grocery shopping](https://www.aboutamazon.com/news/retail/how-to-order-groceries-amazon).
+Download this repository as a ZIP and extract it (or clone it with Git). Open a terminal in the extracted folder containing `package.json`. On Windows, right-click inside the folder and choose **Open in Terminal**.
+
+Run these commands one at a time:
+
+```sh
+npm ci
+npm run setup
+npm start
+```
+
+`setup` downloads the shopping browser and checks Node, Claude login, and browser startup. It does not log you in or make a paid AI request.
+
+Open **http://127.0.0.1:4320** on that computer. Keep the terminal open and the computer awake while shopping. Press **Ctrl+C** in the terminal to stop the app. Next time, just run `npm start` in the same folder.
+
+No Harness, Tailscale, or separate server account is needed. This address works on the computer running the app, not on your phone.
+
+## 3. Connect Amazon and shop
+
+1. Click **Open shopping browser**. Sign in to Amazon in that window and select your delivery address.
+2. Enter your US delivery ZIP, number of people, days, quality preference, and grocery list.
+3. Review the list. Leave counts blank for AI estimates, or enter a number to fix the package count.
+4. Start the run. The app collects search results, then asks Claude to compare them. The AI progress panel shows batches and elapsed time.
+5. Review the results and your Amazon cart. Complete checkout in your regular browser, signed into the same Amazon account.
+
+Failed items may need manual shopping. If an addition is marked **unconfirmed**, check the cart before retrying to avoid duplicates.
+
+## How Claude connects
+
+There is no API key to paste into Pantry Pilot when using a Claude subscription. The app runs the installed `claude` command and uses the login you completed above, under the same computer user. You can close Claude after signing in; Pantry Pilot starts it when needed.
+
+It sends your grocery list, ZIP, preferences, and collected product details to Claude to rank choices and estimate quantities. Amazon passwords and cookies are not sent. Claude only returns recommendations; the app controls the shopping browser. Requests count toward your Claude account’s limits or Console billing.
+
+## If setup fails
+
+Run `npm run doctor` to repeat the checks without reinstalling the browser.
+
+- **Claude not found:** reopen the terminal after installing. Run `claude --version`. For a custom native executable location, set `PANTRY_CLAUDE_BIN` to its full path before starting the app.
+- **Claude login or usage error:** run `claude auth login` and check your account’s access and usage limits.
+- **Browser missing:** run `npm run setup` again.
+- **PowerShell blocks npm.ps1:** use `npm.cmd` in place of `npm` for the commands above.
+- **Wrong delivery ZIP:** select the matching address in the shopping browser, then retry.
+
+Your Amazon session and reports stay in `.local/`. Do not include that folder when sharing the project.
